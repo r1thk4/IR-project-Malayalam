@@ -5,10 +5,7 @@ import os
 import csv 
 import argparse
 
-os.environ['HF_HOME'] = 'D:/huggingface_cache'
-
-
-model_id = "google/gemma-3-1b-it"
+""" os.environ['HF_HOME'] = 'D:/huggingface_cache' """
 
 def load_model_and_tokenizer(model_id):
     print(f"Attempting to load model: {model_id}\n")
