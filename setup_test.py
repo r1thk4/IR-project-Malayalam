@@ -145,7 +145,6 @@ def main_func():
     do_sample = False
 
     tokenizer, model = load_model_and_tokenizer(model_id)
-    # Pass 'num' directly to load_malayalam_dataset
     subset = load_malayalam_dataset(input_dataset, input_data_dir, num)
     generate_and_save_queries(tokenizer, model, subset, output_folder, output_file, max_new_tokens, num_beams, temperature, do_sample)
 
