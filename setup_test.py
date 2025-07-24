@@ -33,10 +33,10 @@ def load_malayalam_dataset(input_dataset, input_data_dir, num):
         print(f"Failed to load documents: {e}")
         exit()
 
-def generate_and_save_queries(tokenizer, model, subset, output_folder, max_new_tokens, num_beams, temperature, do_sample):
+def generate_and_save_queries(tokenizer, model, subset, output_folder, output_file, max_new_tokens, num_beams, temperature, do_sample):
     
     os.makedirs(output_folder, exist_ok=True)
-    output_csv_path = os.path.join(output_folder, 'generated_queries.csv')
+    output_csv_path = os.path.join(output_folder, f'{output_file}.csv')
 
     with open(output_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
         writer = csv.writer(csvfile)
@@ -91,41 +91,48 @@ def generate_and_save_queries(tokenizer, model, subset, output_folder, max_new_t
 def main_func():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--input_dataset",
+        "-d", "--input_dataset",
         type=str,
         default="ai4bharat/sangraha",
         help="Dataset to be loaded. Eg: 'ai4bharat/sangraha' "
     )
     parser.add_argument(
-        "--input_data_dir",
+        "-i", "--input_data_dir",
         type=str,
-        default="verified/mal", 
+        default="verified/mal",
         help="Subdirectory within 'ai4bharat/sangraha' dataset to load, Eg: 'verified/mal'."
     )
     parser.add_argument(
-        "--model_name",
+        "-m", "--model_name",
         type=str,
-        default="google/gemma-3-1b-it", 
+        default="google/gemma-3-1b-it",
         help="Hugging Face model ID to use for query generation. Eg: 'google/gemma-3-1b-it'."
     )
     parser.add_argument(
-        "--output_folder",
+        "-o", "--output_folder",
         type=str,
-        default="generated_queries", 
+        default="generated_queries",
         help="Folder where the synthetic queries will be saved. Will be created if it doesn't exist."
     )
     parser.add_argument(
-        "--num_queries",
+        "-f", "--output_file",
+        type=str,
+        default="generated_queries",
+        help="Base name for the output CSV file (e.g., 'generated_queries' will create 'generated_queries.csv')."
+    )
+    parser.add_argument(
+        "-n", "--num_queries",
         type=int,
-        default=100, 
+        default=100,
         help="Number of synthetic queries to generate from the dataset."
     )
-    
+
     args = parser.parse_args()
     input_dataset = args.input_dataset
     model_id = args.model_name
     input_data_dir = args.input_data_dir
     output_folder = args.output_folder
+    output_file = args.output_file
     num = args.num_queries
 
     max_new_tokens = 50
@@ -135,8 +142,7 @@ def main_func():
 
     tokenizer, model = load_model_and_tokenizer(model_id)
     subset = load_malayalam_dataset(input_dataset, input_data_dir, num)
-    generate_and_save_queries(tokenizer, model, subset, output_folder,
-                              max_new_tokens, num_beams, temperature, do_sample)
+    generate_and_save_queries(tokenizer, model, subset, output_folder, output_file, max_new_tokens, num_beams, temperature, do_sample)
 
 if __name__ == "__main__":
     main_func()
