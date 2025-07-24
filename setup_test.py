@@ -2,7 +2,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from datasets import load_dataset
 import os
-import csv 
+import csv
 import argparse
 
 """ os.environ['HF_HOME'] = 'D:/huggingface_cache' """
@@ -26,15 +26,19 @@ def load_malayalam_dataset(input_dataset, input_data_dir, num):
     print(f"Attempting to load dataset {input_dataset} with data_dir='{input_data_dir}'")
     try:
         dataset = load_dataset(input_dataset, data_dir=input_data_dir)
-        subset = dataset['train'].select(range(num))
-        print(f"Successfully Loaded {len(subset)} documents \n")
+        if num is None:
+            subset = dataset['train']
+            print(f"Successfully Loaded ALL {len(subset)} documents \n")
+        else:
+            subset = dataset['train'].select(range(num))
+            print(f"Successfully Loaded {len(subset)} documents \n")
         return subset
     except Exception as e:
         print(f"Failed to load documents: {e}")
         exit()
 
 def generate_and_save_queries(tokenizer, model, subset, output_folder, output_file, max_new_tokens, num_beams, temperature, do_sample):
-    
+
     os.makedirs(output_folder, exist_ok=True)
     output_csv_path = os.path.join(output_folder, f'{output_file}.csv')
 
@@ -89,7 +93,7 @@ def generate_and_save_queries(tokenizer, model, subset, output_folder, output_fi
 
 
 def main_func():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Generate synthetic queries for Malayalam documents.")
     parser.add_argument(
         "-d", "--input_dataset",
         type=str,
@@ -123,8 +127,8 @@ def main_func():
     parser.add_argument(
         "-n", "--num_queries",
         type=int,
-        default=100,
-        help="Number of synthetic queries to generate from the dataset."
+        default=None,  
+        help="Number of synthetic queries to generate from the dataset. Set to 0 or omit to process all documents."
     )
 
     args = parser.parse_args()
@@ -141,6 +145,7 @@ def main_func():
     do_sample = False
 
     tokenizer, model = load_model_and_tokenizer(model_id)
+    # Pass 'num' directly to load_malayalam_dataset
     subset = load_malayalam_dataset(input_dataset, input_data_dir, num)
     generate_and_save_queries(tokenizer, model, subset, output_folder, output_file, max_new_tokens, num_beams, temperature, do_sample)
 
