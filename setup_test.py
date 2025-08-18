@@ -4,6 +4,7 @@ from datasets import load_dataset
 import os
 import argparse
 import json
+import re
 
 """ os.environ['HF_HOME'] = 'D:/huggingface_cache' """
 
@@ -22,7 +23,7 @@ def load_model_and_tokenizer(model_id):
         print(f"An error occurred while loading model or tokenizer: {e}")
         exit()
 
-def load_malayalam_dataset(input_dataset, input_data_dir, start_index, end_index, num):
+""" def load_malayalam_dataset(input_dataset, input_data_dir, start_index, end_index, num):
     print(f"Attempting to load dataset '{input_dataset}' with data_dir='{input_data_dir}'")
     try:
         dataset = load_dataset(input_dataset, data_dir=input_data_dir, split='train')
@@ -50,44 +51,123 @@ def load_malayalam_dataset(input_dataset, input_data_dir, start_index, end_index
         return subset
     except Exception as e:
         print(f"Failed to load documents: {e}")
-        exit()
+        exit() """
 
-def format_prompt(domain, prompt_config, document_text):
-    if domain not in prompt_config:
-        print(f"Domain '{domain}' not found in prompt_config.json. Available domains: {list(prompt_config.keys())}")
-        exit()
+def get_domain_from_category(document_category, prompt_config):
+    if document_category in prompt_config:
+        return document_category
+    
+    words = re.split(r'[\s,/&|]+', document_category)
+    matched_domains = []
 
-    few_shots = prompt_config[domain]
-    ex = ""
-    for example in few_shots:
-        ex += f"DOCUMENT:\n{example['document']} \n USER QUERY: {example['query']}\n\n"
+    prompt_keys_lower = {k.lower(): k for k in prompt_config.keys()}
+    for word in words:
+        word_lower = word.lower()
+        if word_lower in prompt_keys_lower:
+            og_key = prompt_keys_lower[word_lower]
+            if og_key not in matched_domains:
+                matched_domains.append(og_key)
+    
+    if matched_domains:
+        return matched_domains
+    
+    return ['Miscellaneous']
 
+
+def format_prompt(domains, prompt_config, document_text):
+    if isinstance(domains, str):
+        domains = [domains]
+
+    all_examples = []
+    seen_documents = set() # Use a set to track added documents and avoid duplicates
+    valid_domains = []
+
+    for domain in domains:
+        if domain in prompt_config:
+            valid_domains.append(domain)
+            # Add examples from the valid domain
+            for example in prompt_config[domain]:
+                if example['document'] not in seen_documents:
+                    all_examples.append(example)
+                    seen_documents.add(example['document'])
+        else:
+            print(f"Warning: Domain '{domain}' not found in prompt_config.json.")
+
+    if not valid_domains:
+        print("No valid domains found. Using 'Miscellaneous' as a fallback.")
+        valid_domains = ['Miscellaneous']
+        if 'Miscellaneous' in prompt_config:
+            for example in prompt_config['Miscellaneous']:
+                if example['document'] not in seen_documents:
+                    all_examples.append(example)
+                    seen_documents.add(example['document'])
+
+    example_prompts = ""
+    for example in all_examples:
+        example_prompts += f"DOCUMENT: {example['document']}\nUSER QUERY: {example['query']}\n\n"
+
+    domain_string = " and ".join(valid_domains)
     prompt = (
-        f"Your task is to create a single, natural question in the Malayalam language that a user in the domain {domain} would ask to find the given document. The generated query must be in Malayalam.\n\n"
+        f"Your task is to create a single, natural question in the Malayalam language that a user in the domain(s) {domain_string} would ask to find the given document. The generated query must be in Malayalam.\n\n"
         "---EXAMPLES---\n"
-        f"{ex}"
+        f"{example_prompts}"
         "---YOUR TASK---\n"
         f"DOCUMENT:\n{document_text}\n\n"
         "USER QUERY:"
     )
     return prompt
 
-def generate_and_save_queries(tokenizer, model, subset, output_folder, output_file, prompt_config, domain, max_new_tokens, num_beams, temperature, do_sample):
+def generate_and_save_queries(tokenizer, model, input_file, output_folder, output_file, prompt_config, max_new_tokens, num_beams, temperature, do_sample, start_index, end_index, num_docs):
+    """
+    Reads a JSONL file, generates a query for each line, and saves to a new JSONL file.
+    """
     os.makedirs(output_folder, exist_ok=True)
     output_jsonl_path = os.path.join(output_folder, f'{output_file}.jsonl')
 
-    with open(output_jsonl_path, 'w', newline='', encoding='utf-8') as jsonlfile:
-
-        print(f"Starting query generation and saving results to {output_jsonl_path}... \n")
+    with open(input_file, 'r', encoding='utf-8') as infile, \
+         open(output_jsonl_path, 'w', encoding='utf-8') as outfile:
         
-        for i, item in enumerate(subset):
-            document_text = item['text']
-            print(f"\nProcessing document {i+1}/{len(subset)}...")
-            print(f"Document:\t{document_text}")
-            if not document_text.strip():
+        print(f"Starting query generation. Reading from '{input_file}' and saving results to '{output_jsonl_path}'...\n")
+
+        # Read all lines to apply slicing logic
+        all_lines = infile.readlines()
+        total_docs = len(all_lines)
+
+        start = start_index if start_index is not None else 0
+        end = end_index if end_index is not None else total_docs
+
+        if num_docs is not None:
+            limit_end = start + num_docs
+            end = min(end, limit_end)
+
+        if start < 0 or end > total_docs or start >= end:
+            print(f"FATAL: Invalid range. Final Range: {start} to {end}. Input file has {total_docs} documents.")
+            exit()
+
+        lines_to_process = all_lines[start:end]
+        
+        for i, line in enumerate(lines_to_process):
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                print(f"Skipping malformed JSON line at index {start + i}: {line.strip()}")
+                continue
+
+            document_text = item.get('text')
+            document_category = item.get('category', 'Miscellaneous')
+            doc_id = item.get('doc_id')
+
+            print(f"\nProcessing document {start + i + 1}/{total_docs} (Item {i+1}/{len(lines_to_process)})...")
+            print(f"Original Category: '{document_category}'")
+
+            if not document_text or not document_text.strip():
                 print("Skipping empty document.")
                 continue
-            prompt = format_prompt(domain, prompt_config, document_text)
+            
+            domains = get_domain_from_category(document_category, prompt_config)
+            print(f"Mapped Domain(s): {domains}")
+
+            prompt = format_prompt(domains, prompt_config, document_text)
             inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
             generation_kwargs = {
@@ -104,12 +184,16 @@ def generate_and_save_queries(tokenizer, model, subset, output_folder, output_fi
             new_tokens = response[0, input_length:]
             generated_query = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
-            print(f"Generated Query:\t{generated_query}")
+            print(f"Generated Query: {generated_query}")
+
             record = {
-                "document": document_text,
-                "query": generated_query
+                "doc_id": doc_id,
+                "text": document_text,
+                "category": document_category,
+                "generated_query": generated_query
             }
-            jsonlfile.write(json.dumps(record, ensure_ascii=False) + '\n')
+            outfile.write(json.dumps(record, ensure_ascii=False) + '\n')
+            outfile.flush()
 
     print(f"\nProcessing complete. Results saved to {output_jsonl_path}")
 
@@ -117,27 +201,29 @@ def generate_and_save_queries(tokenizer, model, subset, output_folder, output_fi
 def main_func():
     parser = argparse.ArgumentParser(description="Generate synthetic queries for Malayalam documents.")
     
-    parser.add_argument("-d", "--input_dataset", type=str, default="ai4bharat/sangraha", help="Dataset to be loaded.")
-    parser.add_argument("-i", "--input_data_dir", type=str, default="verified/mal", help="Subdirectory within the dataset.")
-    parser.add_argument("-m", "--model_name", type=str, default="google/gemma-2b-it", help="Hugging Face model ID.")
+    # --- File Arguments ---
+    parser.add_argument("-if", "--input_file", type=str, required=True, help="Path to the input JSONL file.")
     parser.add_argument("-o", "--output_folder", type=str, default="results", help="Folder to save the output.")
-    parser.add_argument("-f", "--output_file", type=str, default=None, help="Name for the output JSONL file. Defaults to 'queries_[domain].jsonl'.")
-    parser.add_argument("-c", "--domain", type=str, default="politics", help="The domain to process (e.g., 'politics', 'sports').")
-    parser.add_argument("-n", "--num", type=int, default=None, help="Number of synthetic queries to generate from the dataset. Set to 0 or omit to process all documents.")
-    parser.add_argument("-s", "--start", type=int, default=None, help="The starting index of the documents to process.")
-    parser.add_argument("-e", "--end", type=int, default=None, help="The ending index (exclusive) of the documents to process.")
-    parser.add_argument("-mt", "--max_new_tokens", type=int, default=50, help="Maximum number of new tokens to generate.")
-    parser.add_argument("-nb", "--num_beams", type=int, default=4, help="Number of beams for beam search.")
-    parser.add_argument("-t", "--temperature", type=float, default=0.7, help="The value used to module the next token probabilities.")
-    parser.add_argument("-ds", "--do_sample", action='store_true', help="Whether or not to use sampling; use greedy decoding otherwise.")
+    parser.add_argument("-f", "--output_file", type=str, default="generated_queries", help="Base name for the output JSONL file.")
+    
+    # --- Model and Data Loading Arguments ---
+    parser.add_argument("-m", "--model_name", type=str, default="google/gemma-2b-it", help="Hugging Face model ID.")
+    parser.add_argument("-s", "--start", type=int, default=None, help="The starting line number of the documents to process.")
+    parser.add_argument("-e", "--end", type=int, default=None, help="The ending line number (exclusive) of the documents to process.")
+    parser.add_argument("-n", "--num", type=int, default=None, help="The maximum number of documents to process from the start index.")
+
+    # --- Generation Parameter Arguments ---
+    parser.add_argument("-mt","--max_new_tokens", type=int, default=50, help="Maximum number of new tokens to generate.")
+    parser.add_argument("-nb","--num_beams", type=int, default=4, help="Number of beams for beam search.")
+    parser.add_argument("-t","--temperature", type=float, default=0.7, help="The value used to module the next token probabilities.")
+    parser.add_argument("-ds","--do_sample", action='store_true', help="Whether or not to use sampling; use greedy decoding otherwise.")
+
     args = parser.parse_args()
 
-    input_dataset = args.input_dataset
+    input_file = args.input_file
     model_name = args.model_name
-    input_data_dir = args.input_data_dir
-    domain = args.domain
     output_folder = args.output_folder
-    output_file = args.output_file if args.output_file else f"queries_{domain}"
+    output_file = args.output_file
     num = args.num
     start = args.start
     end = args.end
@@ -160,12 +246,18 @@ def main_func():
         print("Error decoding JSON from 'prompt_config.json'. Please check the file format.")
         exit()
 
+    try:
+        with open(args.input_file, 'r', encoding='utf-8') as f:
+            pass 
+    except FileNotFoundError:
+        print(f"FATAL: Input file not found at '{args.input_file}'")
+        exit()
    
     tokenizer, model = load_model_and_tokenizer(model_name)
-    subset = load_malayalam_dataset(input_dataset, input_data_dir, start, end, num)
+    """ subset = load_malayalam_dataset(input_dataset, input_data_dir, start, end, num) """
     generate_and_save_queries(        tokenizer,
-        model, subset, output_folder, output_file, prompt_config, domain,
-        max_new_tokens, num_beams, temperature, do_sample
+        model, input_file, output_folder, output_file, prompt_config,
+        max_new_tokens, num_beams, temperature, do_sample, start, end, num
     )
 
 if __name__ == "__main__":
